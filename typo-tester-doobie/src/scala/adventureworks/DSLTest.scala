@@ -5,11 +5,10 @@ import adventureworks.humanresources.employee.EmployeeRepoImpl
 import adventureworks.person.businessentity.BusinessentityRepoImpl
 import adventureworks.person.emailaddress.EmailaddressRepoImpl
 import adventureworks.person.person.PersonRepoImpl
-import adventureworks.public.pgtest.PgtestRepoImpl
+import adventureworks.public.pgtest.{PgtestRepoImpl}
 import adventureworks.sales.salesperson.SalespersonRepoImpl
 import adventureworks.userdefined.FirstName
 import doobie.free.connection.delay
-
 import scala.util.Random
 
 class DSLTest extends SnapshotTest {
@@ -44,6 +43,18 @@ class DSLTest extends SnapshotTest {
         _ <- doubled.count.map(v => assert(v == 1))
         _ <- delay(compareFragment("doubled")(doubled.sql))
       } yield ()
+    }
+  }
+
+  test("projections") {
+    withConnection {
+      val testInsert = new TestInsert(new Random(0), DomainInsert)
+      for {
+        businessentityRow <- testInsert.personBusinessentity()
+        entityGuids <- businessentityRepoImpl.select.toListProj[TypoUUID](f => List(f.rowguid), implicitly)
+      } yield {
+        assert(entityGuids.length == 1 && businessentityRow.rowguid == entityGuids.head)
+      }
     }
   }
 

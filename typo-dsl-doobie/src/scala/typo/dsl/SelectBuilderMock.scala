@@ -1,6 +1,7 @@
 package typo.dsl
 
 import doobie.free.connection.ConnectionIO
+import doobie.util.Read
 import doobie.util.fragment.Fragment
 import typo.dsl.internal.mocks.RowOrdering
 
@@ -72,6 +73,7 @@ final case class SelectBuilderMock[Fields, Row](
   }
 
   override def sql: Option[Fragment] = None
+  override def toListProj[Row2](projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[_, _]], projectedRead: Read[Row2]): ConnectionIO[List[Row2]] = ???
 }
 
 object SelectBuilderMock {

@@ -7,7 +7,6 @@ import doobie.implicits.toSqlInterpolator
 import doobie.util.Read
 import doobie.util.fragment.Fragment
 import typo.dsl.internal.mkFragment.*
-
 import scala.util.Try
 
 sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
@@ -37,6 +36,30 @@ sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
     (frag, instance.read)
   }
 
+  def sqlAndRowParserProj[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+      projectedRead: Read[Row2]
+  ): (Fragment, Read[Row2]) = {
+    val instance = this.instantiate(renderCtx).project[Fields, Row2](projectFields, projectedRead)
+    val cols = instance.columns.map { case (alias, col) =>
+      col.sqlReadCast.foldLeft(s"($alias).\"${col.name}\"") { case (acc, cast) => s"$acc::$cast" }
+    }
+
+    val ctes = instance.asCTEs
+    val formattedCTEs = ctes.map { cte =>
+      fr"""|${Fragment.const0(cte.name)} as (
+           |  ${cte.sql}
+           |)""".stripMargin
+    }
+
+    val frag =
+      fr"""|with
+           |${formattedCTEs.mkFragment(Fragment.const0(",\n"))}
+           |select ${Fragment.const0(cols.mkString(","))} from ${Fragment.const0(ctes.last.name)}""".stripMargin
+
+    (frag, instance.read)
+  }
+
   override lazy val sql: Option[Fragment] = Some(sqlAndRowParser._1)
 
   final override def joinOn[Fields2, N[_]: Nullability, Row2](other: SelectBuilder[Fields2, Row2])(pred: Fields ~ Fields2 => SqlExpr[Boolean, N]): SelectBuilder[Fields ~ Fields2, Row ~ Row2] =
@@ -59,6 +82,16 @@ sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
     val (frag, read) = sqlAndRowParser
     frag.query(using read).to[List]
   }
+  final override def toListProj[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+      projectedRead: Read[Row2]
+  ): ConnectionIO[List[Row2]] = {
+    val (frag, read) = sqlAndRowParserProj(projectFields, projectedRead)
+    println(s"Unprojected query is:\n${sql.get}")
+    println(s"Projected query is:\n${frag}")
+    frag.query(using read).to[List]
+  }
+
   final override def count: ConnectionIO[Int] = {
     val (frag, _) = sqlAndRowParser
     fr"select count(*) from ($frag) rows".query[Int].unique
@@ -202,6 +235,21 @@ object SelectBuilderSql {
       read: Read[Row]
   ) {
     def asCTEs: List[CTE] = upstreamCTEs :+ CTE(alias, sqlFrag, isJoin)
+
+    def project[Fields2, Row2](
+        projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+        projectedRead: Read[Row2]
+    ): Instantiated[Fields2, Row2] = {
+      Instantiated[Fields2, Row2](
+        alias,
+        isJoin,
+        projectFields(structure.fields).map(f => (alias, f)),
+        sqlFrag,
+        upstreamCTEs,
+        structure.asInstanceOf[Structure[Fields2, Row2]],
+        projectedRead
+      )
+    }
   }
   case class CTE(name: String, sql: Fragment, isJoin: Boolean)
 }

@@ -1,6 +1,7 @@
 package typo.dsl
 
 import doobie.free.connection.ConnectionIO
+import doobie.util.Read
 import doobie.util.fragment.Fragment
 
 trait SelectBuilder[Fields, Row] {
@@ -64,6 +65,11 @@ trait SelectBuilder[Fields, Row] {
 
   /** Execute the query and return the results as a list */
   def toList: ConnectionIO[List[Row]]
+  def toListProjSingle[Field](selectField: Fields => List[SqlExpr.FieldLikeNoHkt[Field, Row]])
+  def toListProj[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+      projectedRead: Read[Row2]
+  ): ConnectionIO[List[Row2]]
 
   def count: ConnectionIO[Int]
 
