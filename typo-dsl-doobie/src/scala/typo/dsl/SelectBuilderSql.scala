@@ -17,23 +17,7 @@ sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
 
   lazy val sqlAndRowParser: (Fragment, Read[Row]) = {
     val instance = this.instantiate(renderCtx)
-    val cols = instance.columns.map { case (alias, col) =>
-      col.sqlReadCast.foldLeft(s"($alias).\"${col.name}\"") { case (acc, cast) => s"$acc::$cast" }
-    }
-
-    val ctes = instance.asCTEs
-    val formattedCTEs = ctes.map { cte =>
-      fr"""|${Fragment.const0(cte.name)} as (
-           |  ${cte.sql}
-           |)""".stripMargin
-    }
-
-    val frag =
-      fr"""|with 
-             |${formattedCTEs.mkFragment(Fragment.const0(",\n"))}
-             |select ${Fragment.const0(cols.mkString(","))} from ${Fragment.const0(ctes.last.name)}""".stripMargin
-
-    (frag, instance.read)
+    (instance.toQuery, instance.read)
   }
 
   def sqlAndRowParserProj[Row2](
@@ -41,23 +25,7 @@ sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
       projectedRead: Read[Row2]
   ): (Fragment, Read[Row2]) = {
     val instance = this.instantiate(renderCtx).project[Fields, Row2](projectFields, projectedRead)
-    val cols = instance.columns.map { case (alias, col) =>
-      col.sqlReadCast.foldLeft(s"($alias).\"${col.name}\"") { case (acc, cast) => s"$acc::$cast" }
-    }
-
-    val ctes = instance.asCTEs
-    val formattedCTEs = ctes.map { cte =>
-      fr"""|${Fragment.const0(cte.name)} as (
-           |  ${cte.sql}
-           |)""".stripMargin
-    }
-
-    val frag =
-      fr"""|with
-           |${formattedCTEs.mkFragment(Fragment.const0(",\n"))}
-           |select ${Fragment.const0(cols.mkString(","))} from ${Fragment.const0(ctes.last.name)}""".stripMargin
-
-    (frag, instance.read)
+    (instance.toQuery, instance.read)
   }
 
   override lazy val sql: Option[Fragment] = Some(sqlAndRowParser._1)
@@ -82,14 +50,35 @@ sealed trait SelectBuilderSql[Fields, Row] extends SelectBuilder[Fields, Row] {
     val (frag, read) = sqlAndRowParser
     frag.query(using read).to[List]
   }
-  final override def toListProj[Row2](
-      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+
+  final override def toListProjSingle[Field](selectField: Fields => SqlExpr.FieldLikeNoHkt[Field, Row], projectedRead: Read[Field]): ConnectionIO[List[Field]] = {
+    toListWithSelect[Field](selectField.andThen(List(_)), projectedRead)
+  }
+  final override def toListWithSelect[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, Row]],
       projectedRead: Read[Row2]
   ): ConnectionIO[List[Row2]] = {
     val (frag, read) = sqlAndRowParserProj(projectFields, projectedRead)
     println(s"Unprojected query is:\n${sql.get}")
     println(s"Projected query is:\n${frag}")
     frag.query(using read).to[List]
+  }
+
+  override final def toListProjRow[Fields2, Row2](selectRow: Fields => Fields2): ConnectionIO[List[Row2]] = {
+    val newFields = selectRow(structure.fields)
+    val instance = this.instantiate(renderCtx)
+    println(s"Type of newFields: ${newFields.getClass}")
+    println(s"Fields of newFields: ${newFields.getClass.getFields}")
+    newFields match {
+      case f: SelectBuilderSql.Relation[Fields2, Row2] @unchecked =>
+        val cols = f.structure.columns.map(col => (instance.alias, col))
+        val newInstance = instance.copy[Fields2, Row2](columns = cols, structure = f.structure, read = f.read)
+        val frag = newInstance.toQuery
+        val read = f.read
+        frag.query(using read).to[List]
+      case _ =>
+        sys.error("Match error; expected Relation")
+    }
   }
 
   final override def count: ConnectionIO[Int] = {
@@ -105,6 +94,18 @@ object SelectBuilderSql {
       rowParser: Read[Row]
   ): SelectBuilderSql[Fields, Row] =
     Relation(name, structure, rowParser, SelectParams.empty)
+
+  def formatCTEs(ctes: Seq[CTE]): Seq[Fragment] = {
+    ctes.map { cte =>
+      fr"""|${Fragment.const0(cte.name)} as (
+           |  ${cte.sql}
+           |)""".stripMargin
+    }
+  }
+
+  def formatColumns(cols: List[(String, SqlExpr.FieldLikeNoHkt[?, ?])]): List[String] = cols.map { case (alias, col) =>
+    col.sqlReadCast.foldLeft(s"($alias).\"${col.name}\"") { case (acc, cast) => s"$acc::$cast" }
+  }
 
   final case class Relation[Fields, Row](
       name: String,
@@ -236,6 +237,19 @@ object SelectBuilderSql {
   ) {
     def asCTEs: List[CTE] = upstreamCTEs :+ CTE(alias, sqlFrag, isJoin)
 
+    def toQuery: Fragment = {
+      val cols = formatColumns(columns)
+      val ctes = this.asCTEs
+      val formattedCTEs = formatCTEs(ctes)
+
+      val frag =
+        fr"""|with
+             |${formattedCTEs.mkFragment(Fragment.const0(",\n"))}
+             |select ${Fragment.const0(cols.mkString(","))} from ${Fragment.const0(ctes.last.name)}""".stripMargin
+
+      frag
+    }
+
     def project[Fields2, Row2](
         projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
         projectedRead: Read[Row2]
@@ -252,4 +266,10 @@ object SelectBuilderSql {
     }
   }
   case class CTE(name: String, sql: Fragment, isJoin: Boolean)
+
+//  final case class Projector[Fields, Row](
+//      instance: Instantiated[Fields, Row],
+//  ) {
+//    def toList
+//  }
 }

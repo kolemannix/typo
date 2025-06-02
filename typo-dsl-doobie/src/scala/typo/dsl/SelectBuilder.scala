@@ -65,9 +65,10 @@ trait SelectBuilder[Fields, Row] {
 
   /** Execute the query and return the results as a list */
   def toList: ConnectionIO[List[Row]]
-  def toListProjSingle[Field](selectField: Fields => List[SqlExpr.FieldLikeNoHkt[Field, Row]])
-  def toListProj[Row2](
-      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, ?]],
+  def toListProjSingle[Field](selectField: Fields => SqlExpr.FieldLikeNoHkt[Field, Row], read: Read[Field]): ConnectionIO[List[Field]]
+  def toListProjRow[Fields2, Row2](selectRow: Fields => Fields2): ConnectionIO[List[Row2]]
+  def toListWithSelect[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, Row]],
       projectedRead: Read[Row2]
   ): ConnectionIO[List[Row2]]
 

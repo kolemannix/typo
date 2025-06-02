@@ -4,8 +4,8 @@ import adventureworks.customtypes.*
 import adventureworks.humanresources.employee.EmployeeRepoImpl
 import adventureworks.person.businessentity.BusinessentityRepoImpl
 import adventureworks.person.emailaddress.EmailaddressRepoImpl
-import adventureworks.person.person.PersonRepoImpl
-import adventureworks.public.pgtest.{PgtestRepoImpl}
+import adventureworks.person.person.{PersonFields, PersonRepoImpl, PersonRow}
+import adventureworks.public.pgtest.PgtestRepoImpl
 import adventureworks.sales.salesperson.SalespersonRepoImpl
 import adventureworks.userdefined.FirstName
 import doobie.free.connection.delay
@@ -46,14 +46,48 @@ class DSLTest extends SnapshotTest {
     }
   }
 
-  test("projections") {
+  test("select subset") {
     withConnection {
       val testInsert = new TestInsert(new Random(0), DomainInsert)
       for {
         businessentityRow <- testInsert.personBusinessentity()
-        entityGuids <- businessentityRepoImpl.select.toListProj[TypoUUID](f => List(f.rowguid), implicitly)
+        selected <- businessentityRepoImpl.select.toListWithSelect[(TypoUUID, TypoLocalDateTime)](f => List(f.rowguid, f.modifieddate), implicitly)
       } yield {
-        assert(entityGuids.length == 1 && businessentityRow.rowguid == entityGuids.head)
+        assert(
+          selected.length == 1 &&
+            businessentityRow.rowguid == selected.head._1 &&
+            businessentityRow.modifieddate == selected.head._2
+        )
+      }
+    }
+  }
+  test("select single") {
+    withConnection {
+      val testInsert = new TestInsert(new Random(0), DomainInsert)
+      for {
+        businessentityRow <- testInsert.personBusinessentity()
+        uuids <- businessentityRepoImpl.select.toListProjSingle[TypoUUID](_.rowguid, implicitly)
+        dates <- businessentityRepoImpl.select.toListProjSingle[TypoLocalDateTime](_.modifieddate, implicitly)
+      } yield {
+        assert(
+          uuids.head == businessentityRow.rowguid &&
+            dates.head == businessentityRow.modifieddate
+        )
+      }
+    }
+
+  }
+
+  test("select one table from join") {
+    withConnection {
+      val testInsert = new TestInsert(new Random(0), DomainInsert)
+      for {
+        _ <- testInsert.personBusinessentity()
+        persons <- businessentityRepoImpl.select
+          .joinOn(personRepoImpl.select) { case (busEnt, person) => busEnt.businessentityid === person.businessentityid }
+          .toListProjRow[PersonFields, PersonRow]({ case (busEnt @ _, person) => person })
+      } yield {
+        assert(persons.isEmpty)
       }
     }
   }

@@ -73,7 +73,13 @@ final case class SelectBuilderMock[Fields, Row](
   }
 
   override def sql: Option[Fragment] = None
-  override def toListProj[Row2](projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[_, _]], projectedRead: Read[Row2]): ConnectionIO[List[Row2]] = ???
+
+  override def toListWithSelect[Row2](
+      projectFields: Fields => List[SqlExpr.FieldLikeNoHkt[?, Row]],
+      projectedRead: Read[Row2]
+  ): ConnectionIO[List[Row2]] = ???
+  override def toListProjSingle[Field](selectField: Fields => SqlExpr.FieldLikeNoHkt[Field, Row], read: Read[Field]): ConnectionIO[List[Field]] = ???
+  override def toListProjRow[Fields2, Row2](selectRow: Fields => Fields2): ConnectionIO[List[Row2]] = ???
 }
 
 object SelectBuilderMock {
